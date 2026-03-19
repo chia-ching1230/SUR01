@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SUR01 - 測量案件清冊 (React 範例)</title>
+  <title>SUR01 - 測量案件清冊</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/css/bootstrap.min.css" rel="stylesheet" />
   <script src="/javascripts/vendor.js"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -23,25 +23,26 @@
           const { useEffect, useMemo, useState } = React;
 
           // Helper for calling API endpoints.
-          // 請依照實際後端路徑調整 baseUrl、Controller/Action 與參數格式
-          const baseUrl = "/api"; // 範例："/api" 或 "https://your.domain/" 
+          const baseUrl = "/api";
+
+          //新增一個安全的參數處理函式，確保 undefined 或 null 轉為空字串
+          function safe(v) {
+            return v ?? "";
+          }
+          // 範例：計算段小段資料中的測量標記數量
+          function sumMarkerCount(sectItem) {
+            return ["LM_N01", "LM_N02", "LM_N03", "LM_N04"]
+              .map((k) => Number(sectItem?.[k] ?? 0))
+              .reduce((a, b) => a + b, 0);
+          }
+          // 範例：從選項陣列中取得 KCDE_1 的對應文字標籤
+          function getKcde1Label(options, value) {
+            const found = options.find((x) => x.KCDE_2 === value);
+            return found?.KCNT ?? "";
+          }
 
           async function callApi({ controller, action, params }) {
-            //新增一個安全的參數處理函式，確保 undefined 或 null 轉為空字串
-            function safe(v) {
-              return v ?? "";
-            }
-            // 範例：計算段小段資料中的測量標記數量
-            function sumMarkerCount(sectItem) {
-              return ["LM_N01", "LM_N02", "LM_N03", "LM_N04"]
-                .map((k) => Number(sectItem?.[k] ?? 0))
-                .reduce((a, b) => a + b, 0);
-            }
-            // 範例：從選項陣列中取得 KCDE_1 的對應文字標籤
-            function getKcde1Label(options, value) {
-              const found = options.find((x) => x.KCDE_2 === value);
-              return found?.KCNT ?? "";
-            }
+
             const url = new URL(`${baseUrl}/${controller}/${action}`, window.location.origin);
             if (params) {
               Object.entries(params).forEach(([k, v]) => {
@@ -86,6 +87,7 @@
             const [fileFormat, setFileFormat] = useState("Excel");
             const [zi, setZi] = useState("");
             const [hao, setHao] = useState("");
+            const [officeInfo, setOfficeInfo] = useState({ KCNT: "", KRMK: "" });
 
             const [kcde1Options, setKcde1Options] = useState([]);
             const [kcde2Options, setKcde2Options] = useState([]);
@@ -124,6 +126,7 @@
               };
             }, []);
 
+            //行政區選單會依據收件字選擇後的 kcde1 來載入，因此這裡監聽 kcde1 的變化
             useEffect(() => {
               let cancelled = false;
 
@@ -154,11 +157,62 @@
               };
             }, []);
 
+            //地所資料也會依據行政區選擇後的 kcde2 來載入，因此這裡監聽 kcde2 的變化
+            useEffect(() => {
+              let cancelled = false;
 
+              async function loadOfficeInfo() {
+                try {
+                  const data = await callApi({
+                    controller: "Moiadm",
+                    action: "GetByKcde_1Kcde_2",
+                    params: {
+                      kcde_1: "55",
+                      kcde_2: "01",
+                    },
+                  });
+
+                  const obj = data?.ResultObject;
+
+                  if (cancelled) return;
+
+                  if (Array.isArray(obj) && obj.length > 0) {
+                    setOfficeInfo({
+                      KCNT: obj[0]?.KCNT ?? "",
+                      KRMK: obj[0]?.KRMK ?? "",
+                    });
+                  } else if (obj && !Array.isArray(obj)) {
+                    setOfficeInfo({
+                      KCNT: obj?.KCNT ?? "",
+                      KRMK: obj?.KRMK ?? "",
+                    });
+                  } else {
+                    setOfficeInfo({
+                      KCNT: "",
+                      KRMK: "",
+                    });
+                  }
+                } catch (err) {
+                  console.error("取得地所資料失敗", err);
+                  if (!cancelled) {
+                    setOfficeInfo({
+                      KCNT: "",
+                      KRMK: "",
+                    });
+                  }
+                }
+              }
+
+              loadOfficeInfo();
+
+              return () => {
+                cancelled = true;
+              };
+            }, []);
 
             const canQuery = useMemo(() => {
-              return !!year && !!kcde1 && !!startDate && !!endDate;
-            }, [year, kcde1, startDate, endDate]);
+              return !!startDate && !!endDate;
+            }, [startDate, endDate]);
 
             async function handleQuery(e) {
               e.preventDefault();
@@ -166,7 +220,7 @@
               setResult(null);
 
               if (!canQuery) {
-                setError("請填寫必要欄位（年、收件字、日期範圍）。");
+                setError("請填寫收件日期起訖。");
                 return;
               }
 
@@ -177,36 +231,70 @@
                   controller: "SUR01",
                   action: "Cmsms",
                   params: {
-                    year: year.toString().padStart(3, "0"),
-                    kcde_1: kcde1,
-                    kcde_2: kcde2,
-                    startDate: formatDateToMinguo(startDate),
-                    endDate: formatDateToMinguo(endDate),
+                    mm01: String(year).padStart(3, "0"),
+                    mm02: kcde1,
+                    mm03: hao,
+                    mm04_1s: formatDateToMinguo(startDate),
+                    mm04_1e: formatDateToMinguo(endDate),
+                    mm07: kcde2,
                   },
                 });
 
-                // 2) 取回資料後，可依據 MM08 等欄位進一步查詢段小段資料
-                //    這裡用一個簡單範例：若有 mm08，呼叫 Moined 的 SECT_D / SECT_C
-                const items = Array.isArray(resp) ? resp : [];
-                const withSegments = await Promise.all(
+                const items = Array.isArray(resp?.ResultObject) ? resp.ResultObject : [];
+
+                const rows = await Promise.all(
                   items.map(async (item) => {
-                    if (!item.MM08) return item;
+                    let sectList = [];
+                    let firstSect = {};
+
                     try {
-                      const sectData = await callApi({
+                      const sectResp = await callApi({
                         controller: "Moined",
-                        action: "SECT_D", // 或者 SECT_C
+                        action: "SECT_D/SECT_C",
                         params: {
-                          MM08: item.MM08,
+                          aa48: item.MM08,
                         },
                       });
-                      return { ...item, segments: sectData };
+
+                      sectList = Array.isArray(sectResp?.ResultObject)
+                        ? sectResp.ResultObject
+                        : [];
+
+                      firstSect = sectList[0] ?? {};
                     } catch (innerErr) {
-                      return { ...item, segmentsError: innerErr.message };
+                      console.warn("段小段資料查詢失敗", item.MM08, innerErr);
                     }
+
+                    return {
+                      所別: safe(officeInfo.KCNT),
+                      年度: safe(item.MM01),
+                      收件字: safe(item.MM02Name || getKcde1Label(kcde1Options, item.MM02)),
+                      收件號: safe(item.MM03),
+                      收件日期: safe(item.MM04_1),
+                      結案日期: safe(item.MD05_1),
+                      測量員姓名: safe(item.UserName),
+                      申請事由: safe(item.MM06Name),
+                      辦理情形: safe(item.MM22Name),
+                      行政區代碼: safe(item.MM07),
+                      行政區: safe(item.MM07Name),
+                      段代碼: safe(item.MM08),
+                      代表地號: safe(item.MM09),
+                      筆數: safe(item.MM11),
+                      面積: safe(item.MM12),
+                      釘界界標數量: sumMarkerCount(firstSect),
+                      測量方法: safe(firstSect.SURVEY),
+                      測量類別: safe(firstSect.SURVEY_TP),
+                      成圖年: safe(firstSect.MAP_YEAR),
+                      成圖月: safe(firstSect.MAP_MONTH),
+                      座標系統: safe(firstSect.COORDINATE),
+                      圖幅數: sectList.length,
+                      比例尺: safe(firstSect.SCALE),
+                      地所代碼: safe(officeInfo.KRMK),
+                    };
                   })
                 );
 
-                setResult({ raw: resp, withSegments });
+                setResult(rows);
 
                 // 3) 若要輸出 Excel/ODF，可在這裡將 result 轉成檔案（xlsx / ods）並下載。
                 //    下方提供一個簡易提示範例：
@@ -358,7 +446,7 @@
                         <button
                           type="submit"
                           className="btn btn-success px-4"
-                          disabled={loading || !canQuery}
+                          disabled={loading}
                         >
                           {loading ? "列印中..." : "列印"}
                         </button>
